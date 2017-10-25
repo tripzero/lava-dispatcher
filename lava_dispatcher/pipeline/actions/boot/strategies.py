@@ -39,3 +39,4 @@ from lava_dispatcher.pipeline.actions.boot.ssh import SshLogin, Schroot
 from lava_dispatcher.pipeline.actions.boot.u_boot import UBoot
 from lava_dispatcher.pipeline.actions.boot.uefi import UefiShell
 from lava_dispatcher.pipeline.actions.boot.uefi_menu import UefiMenu
+from lava_dispatcher.pipeline.actions.boot.pxe import PXE

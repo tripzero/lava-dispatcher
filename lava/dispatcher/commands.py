@@ -12,8 +12,7 @@ from lava.dispatcher.node import NodeDispatcher
 import lava_dispatcher.config
 from lava_dispatcher.config import get_config, get_device_config, list_devices
 from lava_dispatcher.job import LavaTestJob, validate_job_data
-from lava_dispatcher.pipeline.action import JobError, LAVAError
-from lava_dispatcher.pipeline.job import ZMQConfig
+from lava_dispatcher.pipeline.action import JobError
 from lava_dispatcher.pipeline.log import YAMLLogger
 from lava_dispatcher.pipeline.device import NewDevice
 from lava_dispatcher.pipeline.parser import JobParser
@@ -89,12 +88,13 @@ def get_pipeline_runner(job):
             job.validate(simulate=validate_only)
             if not validate_only:
                 exitcode = job.run()
-        except (LAVAError, KeyboardInterrupt) as exc:
-            exitcode = 1
-
+        except (JobError, RuntimeError, TypeError, ValueError) as exc:
+            import traceback
+            traceback.print_exc()
+            sys.exit(2)
         if exitcode:
             sys.exit(exitcode)
-
+        # FIXME: should we call the cleanup function in the finally block?
     return run_pipeline_job
 
 
@@ -130,11 +130,10 @@ class dispatch(DispatcherCommand):
             "--job-id", action='store', default=None,
             help=("Set the scheduler job identifier. "
                   "This alters process name for easier debugging"))
-
-        # ZMQ configuration is mandatory for v2 jobs
         parser.add_argument(
             "--socket-addr", default=None,
             help="Address of the ZMQ socket used to send the logs to the master")
+        # Don't put any default value as it has to be defined by the calling process
         parser.add_argument(
             "--master-cert", default=None,
             help="Master certificate file")
@@ -142,30 +141,18 @@ class dispatch(DispatcherCommand):
             "--slave-cert", default=None,
             help="Slave certificate file")
         parser.add_argument(
-            "--ipv6", action='store_true',
-            help="Enable IPv6")
-
-        # Don't put any default value as it has to be defined by the calling process
+            "job_file",
+            metavar="JOB",
+            help="Test scenario file")
         parser.add_argument(
             "--target",
             default=None,
             help="Run the job on a specific target device"
         )
         parser.add_argument(
-            "--dispatcher",
-            default=None,
-            dest="dispatcher_config",
-            help="The dispatcher configuration"
-        )
-        parser.add_argument(
             "--env-dut-path",
             default=None,
             help="File with environment variables to be exported to the device"
-        )
-        parser.add_argument(
-            "job_file",
-            metavar="JOB",
-            help="Test scenario file"
         )
 
     def invoke(self):
@@ -262,30 +249,18 @@ class dispatch(DispatcherCommand):
                 device = NewDevice(self.args.target)  # DeviceParser
             parser = JobParser()
             job = None
-
-            # Load the configuration files (this should *not* fail)
-            env_dut = None
-            if self.args.env_dut_path is not None:
-                with open(self.args.env_dut_path, 'r') as f_in:
-                    env_dut = f_in.read()
-            dispatcher_config = None
-            if self.args.dispatcher_config is not None:
-                with open(self.args.dispatcher_config, "r") as f_in:
-                    dispatcher_config = f_in.read()
+            try:
+                env_dut = str(open(self.args.env_dut_path, 'r').read())
+            except (TypeError, AttributeError):
+                env_dut = None
 
             try:
-                # Create the ZMQ config
-                zmq_config = None
-                if self.args.socket_addr is not None:
-                    zmq_config = ZMQConfig(self.args.socket_addr,
-                                           self.args.master_cert,
-                                           self.args.slave_cert,
-                                           self.args.ipv6)
                 # Generate the pipeline
                 with open(filename) as f_in:
                     job = parser.parse(f_in, device, self.args.job_id,
-                                       zmq_config=zmq_config,
-                                       dispatcher_config=dispatcher_config,
+                                       socket_addr=self.args.socket_addr,
+                                       master_cert=self.args.master_cert,
+                                       slave_cert=self.args.slave_cert,
                                        output_dir=self.args.output_dir,
                                        env_dut=env_dut)
                 # Generate the description
@@ -293,7 +268,8 @@ class dispatch(DispatcherCommand):
                 description_file = os.path.join(self.args.output_dir,
                                                 'description.yaml')
                 if not os.path.exists(self.args.output_dir):
-                    os.makedirs(self.args.output_dir, 0o755)
+                    os.makedirs(self.args.output_dir)
+                    os.chmod(self.args.output_dir, 0o755)
                 with open(description_file, 'w') as f_describe:
                     f_describe.write(yaml.dump(description))
 
